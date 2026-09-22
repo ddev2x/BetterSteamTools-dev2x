@@ -27,7 +27,7 @@ namespace Config {
     };
 
     struct CloudSettings {
-        bool enabled = false;
+        bool enabled = true; // default false
         std::string library;
     };
 

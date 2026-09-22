@@ -64,12 +64,8 @@ namespace ManifestClient {
     // fallback for when the depot is genuinely unknown, and for the two
     // third-party providers that expose no depot-aware route.
     static constexpr Provider kProviders[] = {
-        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",
-                              "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
-        Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",
-                              nullptr,                                          ParsePlainUint),
-        Make("steamrun",      "https://manifest.steam.run/api/manifest/%llu",
-                              nullptr,                                          ParseSteamRunJson),
+        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu", "https://www.niuplayer.xyz/api/manifest/%u/%llu",  ParsePlainUint),
+        // Make("opensteamtool", "https://manifest.opensteamtool.com/%llu", "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
     };
 
     static const Provider* g_active = &kProviders[0];   // opensteamtool
@@ -98,6 +94,18 @@ namespace ManifestClient {
 
     // ── fetch ─────────────────────────────────────────────────────
 
+    static uint64_t ManifestEncode(uint64_t encrypted) {
+        constexpr uint64_t kMask = UINT64_MAX;
+        constexpr uint64_t kKey = 0x5A3C9E17ULL;
+        constexpr uint64_t kMagic = 0x9E3779B97F4A7C15ULL;
+        constexpr uint64_t kFinalMask = 0xDEADBEEFCAFEBABEULL;
+
+        uint64_t value = encrypted ^ kFinalMask;
+        value = (value - kMagic) & kMask;
+        value = ((value >> 13) | (value << (64 - 13))) & kMask;
+        return value ^ kKey;
+    }
+
     static bool FetchActive(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
         const Provider& p = *g_active;
         const Config::ManifestTimeouts timeouts = Config::GetManifestTimeouts();
@@ -108,7 +116,8 @@ namespace ManifestClient {
         char urlLog[256];
         const bool depotAware = p.urlTemplateEx && depotId;
         if (depotAware)
-            std::snprintf(urlLog, sizeof(urlLog), p.urlTemplateEx, appId, depotId, gid);
+            // std::snprintf(urlLog, sizeof(urlLog), p.urlTemplateEx, appId, depotId, gid);
+            std::snprintf(urlLog, sizeof(urlLog), p.urlTemplateEx, static_cast<uint32_t>(depotId), gid);
         else
             std::snprintf(urlLog, sizeof(urlLog), p.urlTemplate, gid);
 
@@ -130,7 +139,13 @@ namespace ManifestClient {
                           p.name, r.status, gid, depotId, depotAware ? "app/depot/gid" : "gid-only");
 
         if (!r.ok || r.status != 200) return false;
-        return p.parse(r.body, outCode);
+
+        uint64_t encryptedCode = 0;
+        if (!p.parse(r.body, &encryptedCode)) return false;
+
+        *outCode = depotAware ? ManifestEncode(encryptedCode) : encryptedCode;
+        return true;
+
     }
 
     // ── public ────────────────────────────────────────────────────
