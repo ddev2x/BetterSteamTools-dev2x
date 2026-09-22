@@ -63,6 +63,7 @@ namespace ManifestClient {
     // that works for ordinary depots. The gid-only template is kept solely as a
     // fallback for when the depot is genuinely unknown, and for the two
     // third-party providers that expose no depot-aware route.
+    // 顺序是“先直接下清单”，只有下不到时才去走 RequestCode
     static constexpr Provider kProviders[] = {
         Make("opensteamtool", "https://manifest.opensteamtool.com/%llu", "https://www.niuplayer.xyz/api/manifest/%u/%llu",  ParsePlainUint),
         // Make("opensteamtool", "https://manifest.opensteamtool.com/%llu", "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
