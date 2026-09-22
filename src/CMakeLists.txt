@@ -19,6 +19,10 @@ set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 
 if(NOT WIN32)
     message(STATUS "OpenSteamTool: no targets on non-Windows platforms; skipping.")
@@ -202,7 +206,7 @@ endif()
 # This is a compile-time cut, not a runtime setting: with it off, the updater is
 # not reachable at all and [update] enabled in opensteamtool.toml has no effect.
 # Use it for private or pinned builds that must not be replaced under the user.
-option(OST_ENABLE_UPDATER "Compile in the self-updater" ON)
+option(OST_ENABLE_UPDATER "Compile in the self-updater" OFF)
 if(OST_ENABLE_UPDATER)
     target_compile_definitions(OpenSteamTool PRIVATE OST_ENABLE_UPDATER)
 endif()

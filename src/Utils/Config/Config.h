@@ -27,7 +27,7 @@ namespace Config {
     };
 
     struct CloudSettings {
-        bool enabled = false;
+        bool enabled = true; // default false
         std::string library;
     };
 
@@ -81,7 +81,7 @@ namespace Config {
     inline bool statsEnableApi = true;
 
     // [update] - self-update check on startup (staged for next Steam launch).
-    inline bool updateEnabled = true;
+    inline bool updateEnabled = false;
 
     // [donate] - mint manifest request codes on request for depots this account
     // owns. Codes are bound to (depot, manifest) and rotate within minutes, so

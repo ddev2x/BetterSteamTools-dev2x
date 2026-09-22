@@ -18,7 +18,7 @@ namespace {
         std::vector<std::string> luaPaths;
         std::vector<std::string> remoteUrlTemplates;
         bool statsEnableApi = true;
-        bool updateEnabled = true;
+        bool updateEnabled = false;
         DonateSettings donate;
         std::vector<InjectDll> injectDlls;
         CloudSettings cloud;
