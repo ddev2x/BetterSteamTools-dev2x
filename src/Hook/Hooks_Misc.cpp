@@ -29,23 +29,44 @@ namespace {
     // arg1=pCUser, arg2=pExePath, arg3=pCommandLine, arg4=pWorkingDir
     // arg5=pGameID (CGameID*; low 24 bits = AppId)
     
+    //static void OnSpawnProcessHit(OSTPlatform::Trap::Context& ctx, const VehCommon::Int3Site& /*site*/) {
+    //    CGameID* pGameID = VehCommon::GetArg<CGameID*>(ctx, 5);
+    //    AppId_t appId = static_cast<AppId_t>(pGameID->AppID(true));
+    //    const char* cmdLine = VehCommon::GetArg<const char*>(ctx, 3);
+    //    // Enable 480 when:
+    //    // 1. Command-line explicitly specifies -onlinefix
+    //    // 2. OR: App is unlocked via Lua and not legitimately owned (protects legit games)
+    //    bool isExplicit = (cmdLine && strstr(cmdLine, "-onlinefix") != nullptr);
+    //    bool isUnlockedApp = (appId != 0 && appId != kOnlineFixAppId && LuaConfig::HasDepot(appId, /*checkOwned=*/true));
+    //    if (isExplicit || isUnlockedApp)
+    //    {
+    //        g_OnlineFixRealAppId = appId;
+    //        g_NetworkingSocketsActive = false;
+    //        g_SuppressAppIdFlip = (cmdLine && strstr(cmdLine, "-realappid") != nullptr);
+    //        pGameID->SetAppID(kOnlineFixAppId);
+    //        LOG_MISC_INFO("SpawnProcess: appid {} -> 480 (auto={}), realappid={}, cmd=\"{}\"",
+    //            appId, isUnlockedApp, g_SuppressAppIdFlip, cmdLine ? cmdLine : "");
+    //    }
+    //    else {
+    //        g_OnlineFixRealAppId = 0;
+    //        g_SuppressAppIdFlip = false;
+    //    }
+    //}
+
     static void OnSpawnProcessHit(OSTPlatform::Trap::Context& ctx, const VehCommon::Int3Site& /*site*/) {
         CGameID* pGameID = VehCommon::GetArg<CGameID*>(ctx, 5);
         AppId_t appId = static_cast<AppId_t>(pGameID->AppID(true));
         const char* cmdLine = VehCommon::GetArg<const char*>(ctx, 3);
-        // Enable 480 when:
-        // 1. Command-line explicitly specifies -onlinefix
-        // 2. OR: App is unlocked via Lua and not legitimately owned (protects legit games)
-        bool isExplicit = (cmdLine && strstr(cmdLine, "-onlinefix") != nullptr);
-        bool isUnlockedApp = (appId != 0 && appId != kOnlineFixAppId && LuaConfig::HasDepot(appId, /*checkOwned=*/true));
-        if (isExplicit || isUnlockedApp)
+
+        // 仅在启动项显式带有 -onlinefix 时才启用 480 伪装
+        if (cmdLine && strstr(cmdLine, "-onlinefix"))
         {
             g_OnlineFixRealAppId = appId;
             g_NetworkingSocketsActive = false;
-            g_SuppressAppIdFlip = (cmdLine && strstr(cmdLine, "-realappid") != nullptr);
+            g_SuppressAppIdFlip = strstr(cmdLine, "-realappid") != nullptr;
             pGameID->SetAppID(kOnlineFixAppId);
-            LOG_MISC_INFO("SpawnProcess: appid {} -> 480 (auto={}), realappid={}, cmd=\"{}\"",
-                appId, isUnlockedApp, g_SuppressAppIdFlip, cmdLine ? cmdLine : "");
+            LOG_MISC_INFO("SpawnProcess: appid {} -> {}, realappid={}, cmd=\"{}\"",
+                appId, kOnlineFixAppId, g_SuppressAppIdFlip, cmdLine);
         }
         else {
             g_OnlineFixRealAppId = 0;

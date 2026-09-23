@@ -594,6 +594,12 @@ namespace LuaConfig{
         return 0;
     }
 
+    void SetAccessToken(AppId_t AppId, uint64_t token) {
+        if (token) {
+            AccessTokenSet[AppId] = token;
+        }
+    }
+
     std::optional<std::string> GetLegacyCDKey(AppId_t AppId) {
         auto it = LegacyCDKeySet.find(AppId);
         if (it != LegacyCDKeySet.end())

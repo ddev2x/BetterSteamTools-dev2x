@@ -9,6 +9,7 @@
 #include "Utils/SteamMetadata/PatternLoader.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Tokeer/TokeerBridge.h"
+#include "Utils/AppMetadata/AppMetadataIpcServer.h"
 #ifdef OST_ENABLE_UPDATER
 #include "Utils/Update/AppUpdater.h"
 #endif
@@ -103,6 +104,8 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // DLL (rundll32 handler). HKCU, no admin; idempotent.
     TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
 
+    // Start IPC Named Pipe server for querying DLC and Depot Manifests
+    AppMetadataIpcServer::Start();
 
     LOG_INFO("OpenSteamTool init complete");
     return 0;
@@ -136,6 +139,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     }
     else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost())
     {
+        AppMetadataIpcServer::Stop();
         ConfigFileWatcher::Stop();
         LuaFileWatcher::Stop();
         SteamUI::CoreUnhook();
