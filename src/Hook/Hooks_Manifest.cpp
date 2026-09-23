@@ -225,15 +225,9 @@ namespace {
               void* a1, void* a2, int appId, uint32_t depotId,
               uint64_t manifestGid, const char* branch)
     {
-        // Only depots OST unlocks and does not own (lua-added, incl. workshop
-        // apps). A bounded blocking fetch: the original checks disk on the very
-        // next line, so an archive hit converts into a first-attempt success; a
-        // miss just returns and the original takes its normal request-code path.
-        if ( depotId && manifestGid && LuaConfig::HasDepot(depotId) ) {
-            LOG_MANIFEST_DEBUG("YldLoadDepotManifest: pre-seed app={} depot={} gid={} branch={}",
-                               appId, depotId, manifestGid, branch ? branch : "");
-            ManifestCache::EnsureCached(appId, depotId, manifestGid, kPreseedFetchTimeoutMs);
-        }
+        // Pre-seeding disabled here: query GetManifestRequestCode first so that
+        // the configured request code provider takes priority. If the code is
+        // unavailable, Hooks_NetPacket_Manifest falls back to EnsureCached.
         return oYldLoadDepotManifest(a1, a2, appId, depotId, manifestGid, branch);
     }
 

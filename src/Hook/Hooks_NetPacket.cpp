@@ -1063,45 +1063,27 @@ namespace Hooks_NetPacket_Manifest {
         // the gid is authoritative. Detached + best-effort; if the archive has it,
         // Steam's own retry (~30 s) finds the manifest on disk and skips the code
         // path entirely. A miss just falls through to the fetched-code attempt.
-        {
-            const AppId_t  a = appId;
-            const uint32   d = depotId;
-            const uint64   g = manifestGid;
-            // A code request fires for BOTH real user downloads and Steam's
-            // background scheduled-update retries (~every 30 s). Only an app that
-            // is actively downloading is a real user action; only then do we
-            // bypass the negative cache (fetch fresh, to pick up a just-supplied
-            // manifest) and surface the "not ready" box. Scheduled/queued requests
-            // ride the negative cache and stay silent, so they neither hammer the
-            // archive nor spam popups.
-            // A game's DLC depots carry the DLC app id, but only the BASE game is
-            // marked downloading - so checking this depot's own app id misses it
-            // (verified: appActive=false while dlCount=1 during a Sims 4 DLC
-            // download). Use "is any app actively downloading": true during a real
-            // user download, false at idle startup when Steam is only retrying its
-            // scheduled-update queue.
-            const bool active = Hooks_SteamUI::ActiveDownloadCount() > 0;
-            OSTPlatform::Thread::StartDetached([a, d, g, active]() -> uint32_t {
-                bool notArchived = false;
-                bool ok = ManifestCache::EnsureCached(a, d, g, 0, &notArchived, /*bypassNeg=*/active);
-                if (active && !ok && notArchived)
-                    Hooks_Manifest::ReportMissingManifest(d, g);
-                return 0;
-            });
-        }
-
-        // Note: a manifest already present in config\depotcache does NOT let us
-        // skip this. Measured 2026-09-09 — depot 4889481's manifest was on disk
-        // and Steam still requested a code, put it straight into the CDN path
-        // (/depot/<d>/manifest/<gid>/5/<code>) and downloaded the manifest
-        // afresh. Answering with a placeholder produced 401 on every CDN and
-        // "update canceled : Failed downloading 1 manifests". The code is used
-        // and must be genuine.
         auto task = std::async(std::launch::async,
             [manifestGid, depotId, appId]() -> uint64 {
                 uint64 code = 0;
                 ManifestClient::FetchManifestRequestCode(manifestGid, &code, appId, depotId);
-                return code;
+                if (code) {
+                    return code;
+                }
+
+                // Fallback: If request code is not available, download manifest file directly from archive
+                LOG_MANIFEST_INFO("GetManifestRequestCode: code unavailable for depot={} gid={}, falling back to archive download",
+                                  depotId, manifestGid);
+                const bool active = Hooks_SteamUI::ActiveDownloadCount() > 0;
+                OSTPlatform::Thread::StartDetached([appId, depotId, manifestGid, active]() -> uint32_t {
+                    bool notArchived = false;
+                    bool ok = ManifestCache::EnsureCached(appId, depotId, manifestGid, 0, &notArchived, /*bypassNeg=*/active);
+                    if (active && !ok && notArchived)
+                        Hooks_Manifest::ReportMissingManifest(depotId, manifestGid);
+                    return 0;
+                });
+
+                return 0;
             });
 
         {
