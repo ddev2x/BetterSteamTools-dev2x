@@ -4,6 +4,13 @@
 
 #include <toml++/toml.hpp>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <filesystem>
 #include <mutex>
 
@@ -301,8 +308,30 @@ namespace {
 
     CloudSettings GetCloudSettings() {
         std::lock_guard lock(g_mutex);
+        bool enabled = true;
+#ifdef _WIN32
+        DWORD regValue = 0;
+        DWORD regDataSize = sizeof(regValue);
+        LSTATUS status = RegGetValueW(
+            HKEY_CURRENT_USER,
+            L"Software\\Classes\\Local Settings\\Software\\.dev2x",
+            L"cloud_redirect",
+            RRF_RT_REG_DWORD,
+            nullptr,
+            &regValue,
+            &regDataSize);
+
+        if (status == ERROR_SUCCESS) {
+            enabled = (regValue != 0);
+        } else {
+            // 不存在则开启
+            enabled = true;
+        }
+#else
+        enabled = cloudEnabled;
+#endif
         return {
-            cloudEnabled,
+            enabled,
             cloudLibrary,
         };
     }

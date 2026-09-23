@@ -88,7 +88,7 @@ namespace {
 void Initialize(const char* steamInstallPath) {
     const Config::CloudSettings cloud = Config::GetCloudSettings();
     if (!cloud.enabled) {
-        LOG_INFO("CloudRedirect: [cloud].enabled is false, cloud save redirection disabled");
+        LOG_INFO("CloudRedirect: cloud save redirection disabled (cloud_redirect=0 or disabled in config)");
         return;
     }
     if (!steamInstallPath || steamInstallPath[0] == '\0') {
