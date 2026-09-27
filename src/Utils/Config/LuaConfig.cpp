@@ -600,6 +600,18 @@ namespace LuaConfig{
         }
     }
 
+    bool AddDynamicApp(AppId_t AppId, uint64_t token) {
+        bool isNew = false;
+        if (!DepotKeySet.count(AppId)) {
+            DepotKeySet[AppId] = "";
+            isNew = true;
+        }
+        if (token) {
+            AccessTokenSet[AppId] = token;
+        }
+        return isNew;
+    }
+
     std::optional<std::string> GetLegacyCDKey(AppId_t AppId) {
         auto it = LegacyCDKeySet.find(AppId);
         if (it != LegacyCDKeySet.end())

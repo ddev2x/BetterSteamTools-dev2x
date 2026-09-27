@@ -17,6 +17,7 @@ namespace LuaConfig{
     std::vector<uint8> GetDecryptionKey(AppId_t appId);
     uint64_t GetAccessToken(AppId_t appId);
     void SetAccessToken(AppId_t appId, uint64_t token);
+    bool AddDynamicApp(AppId_t appId, uint64_t token);
     // Legacy third-party CD key override for an app, if the user set one via
     // setlegacycdkey(appid, "KEY"); nullopt when no override is configured.
     std::optional<std::string> GetLegacyCDKey(AppId_t appId);

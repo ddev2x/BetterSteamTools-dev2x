@@ -1,6 +1,7 @@
 #include "AppMetadataIpcServer.h"
 #include "VdfParser.h"
 #include "Utils/Config/LuaConfig.h"
+#include "Hook/Hooks_Package.h"
 #include "Utils/Logging/Log.h"
 #include "OSTPlatform/include/Thread.h"
 
@@ -110,9 +111,37 @@ namespace {
         bool forceRefresh = false;
         JsonExtractBool(requestStr, "forceRefresh", forceRefresh);
 
-        // Query app metadata from appinfo.vdf cache
-        auto result = VdfParser::QueryAppMetadata(appId);
-        return result.ToJson();
+        // 1. Try local cache first if forceRefresh is false
+        if (!forceRefresh) {
+            auto result = VdfParser::QueryAppMetadata(appId);
+            if (result.code == 0) {
+                return result.ToJson();
+            }
+        }
+
+        // 2. Cache miss or forceRefresh requested: trigger Steam PICS synchronization
+        LOG_INFO("AppMetadataIpcServer: AppId {} not in local cache (or forceRefresh=true), triggering PICS fetch...", appId);
+        bool triggered = Hooks_Package::TriggerAppInfoFetch(appId, token);
+        if (triggered) {
+            // Wait for Steam to receive PICS response and update appinfo.vdf (up to 5s, poll every 250ms)
+            auto startTime = std::chrono::steady_clock::now();
+            while (std::chrono::steady_clock::now() - startTime < std::chrono::milliseconds(5000)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                auto result = VdfParser::QueryAppMetadata(appId);
+                if (result.code == 0) {
+                    LOG_INFO("AppMetadataIpcServer: PICS fetch resolved for AppId {}", appId);
+                    return result.ToJson();
+                }
+            }
+            LOG_WARN("AppMetadataIpcServer: PICS fetch wait finished for AppId {}", appId);
+        }
+
+        // 3. Final query attempt after PICS fetch
+        auto finalResult = VdfParser::QueryAppMetadata(appId);
+        if (finalResult.code != 0 && triggered) {
+            finalResult.message = std::format("AppId {} not resolved after PICS request (may require token, or non-existent)", appId);
+        }
+        return finalResult.ToJson();
     }
 
     uint32_t ServerWorkerThread() {
