@@ -26,14 +26,23 @@ namespace {
     HANDLE g_hStopEvent = nullptr;
 
     // Minimal JSON helpers
-    bool JsonExtractString(std::string_view body, std::string_view key, std::string& out) {
+    size_t FindValueStart(std::string_view body, std::string_view key) {
         std::string needle = "\"" + std::string(key) + "\"";
         size_t k = body.find(needle);
-        if (k == std::string_view::npos) return false;
+        if (k == std::string_view::npos) return std::string_view::npos;
         size_t colon = body.find(':', k + needle.size());
-        if (colon == std::string_view::npos) return false;
-        size_t q1 = body.find('"', colon + 1);
-        if (q1 == std::string_view::npos) return false;
+        if (colon == std::string_view::npos) return std::string_view::npos;
+        size_t v = colon + 1;
+        while (v < body.size() && isspace(static_cast<unsigned char>(body[v]))) {
+            v++;
+        }
+        return v < body.size() ? v : std::string_view::npos;
+    }
+
+    bool JsonExtractString(std::string_view body, std::string_view key, std::string& out) {
+        size_t v = FindValueStart(body, key);
+        if (v == std::string_view::npos || body[v] != '"') return false;
+        size_t q1 = v;
         size_t q2 = body.find('"', q1 + 1);
         if (q2 == std::string_view::npos) return false;
         out = std::string(body.substr(q1 + 1, q2 - q1 - 1));
@@ -41,41 +50,40 @@ namespace {
     }
 
     bool JsonExtractUInt64(std::string_view body, std::string_view key, uint64_t& out) {
-        // Try as string first: "key":"12345"
-        std::string strVal;
-        if (JsonExtractString(body, key, strVal)) {
-            auto [p, ec] = std::from_chars(strVal.data(), strVal.data() + strVal.size(), out);
-            return (ec == std::errc{});
-        }
-        // Try as raw integer: "key": 12345
-        std::string needle = "\"" + std::string(key) + "\"";
-        size_t k = body.find(needle);
-        if (k == std::string_view::npos) return false;
-        size_t colon = body.find(':', k + needle.size());
-        if (colon == std::string_view::npos) return false;
-        size_t start = colon + 1;
-        while (start < body.size() && isspace(static_cast<unsigned char>(body[start]))) start++;
-        size_t end = start;
-        while (end < body.size() && isdigit(static_cast<unsigned char>(body[end]))) end++;
-        if (end > start) {
-            std::string_view numStr = body.substr(start, end - start);
+        size_t v = FindValueStart(body, key);
+        if (v == std::string_view::npos) return false;
+
+        // Case 1: Quoted string "12345"
+        if (body[v] == '"') {
+            size_t q2 = body.find('"', v + 1);
+            if (q2 == std::string_view::npos) return false;
+            std::string_view numStr = body.substr(v + 1, q2 - v - 1);
             auto [p, ec] = std::from_chars(numStr.data(), numStr.data() + numStr.size(), out);
             return (ec == std::errc{});
         }
+
+        // Case 2: Raw number 12345
+        if (isdigit(static_cast<unsigned char>(body[v]))) {
+            size_t end = v;
+            while (end < body.size() && isdigit(static_cast<unsigned char>(body[end]))) {
+                end++;
+            }
+            std::string_view numStr = body.substr(v, end - v);
+            auto [p, ec] = std::from_chars(numStr.data(), numStr.data() + numStr.size(), out);
+            return (ec == std::errc{});
+        }
+
         return false;
     }
 
     bool JsonExtractBool(std::string_view body, std::string_view key, bool& out) {
-        std::string needle = "\"" + std::string(key) + "\"";
-        size_t k = body.find(needle);
-        if (k == std::string_view::npos) return false;
-        size_t colon = body.find(':', k + needle.size());
-        if (colon == std::string_view::npos) return false;
-        if (body.find("true", colon + 1) != std::string_view::npos) {
+        size_t v = FindValueStart(body, key);
+        if (v == std::string_view::npos) return false;
+        if (body.substr(v, 4) == "true") {
             out = true;
             return true;
         }
-        if (body.find("false", colon + 1) != std::string_view::npos) {
+        if (body.substr(v, 5) == "false") {
             out = false;
             return true;
         }
