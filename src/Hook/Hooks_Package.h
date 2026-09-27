@@ -14,9 +14,6 @@ namespace Hooks_Package {
     // Mark package 0 as changed and trigger CClientAppManager_ProcessPendingLicenseUpdates.
     void NotifyLicenseChanged();
 
-    // Dynamically inject an appId (and optional token) into package 0 and notify Steam to fetch PICS metadata.
-    bool TriggerAppInfoFetch(AppId_t appId, uint64_t token = 0);
-
     // One entry of the license list Steam sends after logon. The access token is
     // required: GetPackageInfo will not return a PackageInfo without it.
     struct License {

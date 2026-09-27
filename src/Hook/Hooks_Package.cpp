@@ -327,49 +327,4 @@ namespace Hooks_Package {
         LOG_PACKAGE_DEBUG("NotifyLicenseChanged: queued {} UI removals, skipped {} transient removals",
                           queuedRemovalCount, removals.size() - queuedRemovalCount);
     }
-
-    bool TriggerAppInfoFetch(AppId_t appId, uint64_t token) {
-        if (!TryInitFakeLicenseOnce()) {
-            LOG_PACKAGE_WARN("TriggerAppInfoFetch: fake license init not ready yet for appId {}", appId);
-            return false;
-        }
-
-        PackageInfo* pPkg = g_pInjectedPackageInfo;
-        if (!pPkg || !g_pCUser || !oMarkLicenseAsChanged || !oProcessPendingLicenseUpdates) {
-            LOG_PACKAGE_WARN("TriggerAppInfoFetch: dependencies not ready (pPkg={}, pUser={})",
-                             (void*)pPkg, g_pCUser);
-            return false;
-        }
-
-        LuaConfig::AddDynamicApp(appId, token);
-
-        // Check if appId is already in AppIdVec
-        bool exists = false;
-        for (uint32_t i = 0; i < pPkg->AppIdVec.m_Size; ++i) {
-            if (pPkg->AppIdVec.m_Memory.m_pMemory[i] == appId) {
-                exists = true;
-                break;
-            }
-        }
-
-        if (!exists) {
-            uint32_t oldSize = pPkg->AppIdVec.m_Size;
-            if (CUtlMemoryGrowWrap(&pPkg->AppIdVec, 1)) {
-                pPkg->AppIdVec.m_Memory.m_pMemory[oldSize] = appId;
-                LOG_PACKAGE_INFO("TriggerAppInfoFetch: added appId {} to package 0 (size={})", appId, pPkg->AppIdVec.m_Size);
-            } else {
-                LOG_PACKAGE_WARN("TriggerAppInfoFetch: failed to grow AppIdVec for appId {}", appId);
-                return false;
-            }
-        }
-
-        // Trigger Steam license updates -> causes Steam to request PICS for newly added app
-        if (!MarkLicenseAsChangedAndProcessUpdates()) {
-            LOG_PACKAGE_WARN("TriggerAppInfoFetch: failed to mark license as changed");
-            return false;
-        }
-
-        LOG_PACKAGE_INFO("TriggerAppInfoFetch: successfully triggered PICS request for appId {}", appId);
-        return true;
-    }
 }

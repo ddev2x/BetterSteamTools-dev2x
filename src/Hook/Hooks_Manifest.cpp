@@ -1,4 +1,5 @@
 #include "Hooks_Manifest.h"
+#include "Hooks_Package.h"
 #include "HookMacros.h"
 #include "dllmain.h"
 #include "OSTPlatform/include/Thread.h"
@@ -174,6 +175,41 @@ namespace {
         // Before the override pass, so what is cached is Steam's GID.
         RecordDepots(pDepotInfo);
         RecordDepots(pSharedDepotInfo);
+
+        // ── 直接跳过无法解密的收费 DLC Depot，保证其余内容完成下载 ──
+        if (pDepotInfo && pDepotInfo->m_Size > 0) {
+            auto owned = Hooks_Package::GetOwnedDepots();
+            if (owned.ready) {
+                const std::unordered_set<uint32_t> ownedSet(owned.depots.begin(), owned.depots.end());
+                uint32 newSize = 0;
+                for (uint32 i = 0; i < pDepotInfo->m_Size; ++i) {
+                    const DepotEntry& e = pDepotInfo->m_Memory.m_pMemory[i];
+
+                    // 判定条件：
+                    // 1. 必须是明确关联到 DLC 的仓库（e.DlcAppId != 0 且不等于游戏本体 AppId）
+                    // 2. 该仓库不属于账户真实拥有/免费领取的仓库集合（!ownedSet.count）
+                    // 3. 该 DLC 本身也不在已拥有列表中（!LuaConfig::IsOwned）
+                    // 4. 本地未配置 64 位有效的 depotKey（GetDecryptionKey 为空）
+                    bool isUnkeyableDlc = (e.DlcAppId != 0 && e.DlcAppId != AppId)
+                        && !ownedSet.count(e.DepotId)
+                        && !LuaConfig::IsOwned(e.DlcAppId)
+                        && LuaConfig::GetDecryptionKey(e.DepotId).empty();
+
+                    if (isUnkeyableDlc) {
+                        LOG_MANIFEST_WARN("BuildDepotDependency: 跳过无密钥的收费 DLC 仓库 depot={} (DLC={})，防止卡加密状态",
+                            e.DepotId, e.DlcAppId);
+                        continue; // 直接跳过，不加入下载列表
+                    }
+
+                    if (newSize != i) {
+                        pDepotInfo->m_Memory.m_pMemory[newSize] = e;
+                    }
+                    newSize++;
+                }
+                pDepotInfo->m_Size = newSize;
+            }
+        }
+
 
         const auto& overrides = LuaConfig::GetManifestOverrides();
 
