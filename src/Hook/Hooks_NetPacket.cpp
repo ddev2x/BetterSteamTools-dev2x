@@ -2,6 +2,7 @@
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Utils/SteamMetadata/ManifestDonor.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
+#include "Utils/SteamMetadata/SchemaDownloader.h"
 #include "Utils/Config/Config.h"
 #include "OSTPlatform/include/Thread.h"
 #include "Hooks_Misc.h"
@@ -396,6 +397,7 @@ namespace Hooks_NetPacket_UserStats {
 
         uint64_t newSteamId = LuaConfig::GetStatSteamId(appId);
         req.set_steamid(newSteamId);
+        SchemaDownloader::EnsureSchemaAsync(appId, newSteamId);
 
         g_cbSendNewBody = static_cast<uint32>(req.ByteSizeLong());
         if (!req.SerializeToArray(g_SendNewBody, kMaxBodySize)) {
@@ -491,6 +493,7 @@ namespace Hooks_NetPacket_UserStats {
 
         uint64_t newSteamId = LuaConfig::GetStatSteamId(appId);
         req.set_steam_id_for_user(newSteamId);
+        SchemaDownloader::EnsureSchemaAsync(appId, newSteamId);
 
         g_cbSendNewBody = static_cast<uint32>(req.ByteSizeLong());
         if (!req.SerializeToArray(g_SendNewBody, kMaxBodySize)) {
@@ -518,8 +521,20 @@ namespace Hooks_NetPacket_UserStats {
         resp.clear_achievement_blocks();
         resp.set_eresult(1);  // k_EResultOK
 
-        // Overlay CR's cloud-synced achievement state
         const auto appId = static_cast<uint32_t>(resp.game_id());
+
+        // If CM response lacks schema, inject schema from disk cache or remote downloader
+        if (resp.schema().empty()) {
+            std::string schemaData;
+            if (SchemaDownloader::GetOrFetchSchema(appId, LuaConfig::GetStatSteamId(appId), schemaData)) {
+                if (resp.ByteSizeLong() + schemaData.size() + 128 < sizeof(g_NewBody)) {
+                    resp.set_schema(schemaData.data(), schemaData.size());
+                    LOG_ACHIEVEMENT_INFO("ClientGetUserStats response: injected schema for app {} ({} bytes)", appId, schemaData.size());
+                }
+            }
+        }
+
+        // Overlay CR's cloud-synced achievement state
         CloudRedirectHost::AchievementBlock blocks[64];
         uint32_t n = CloudRedirectHost::GetAchievements(appId, blocks, 64);
         if (n > 0) {

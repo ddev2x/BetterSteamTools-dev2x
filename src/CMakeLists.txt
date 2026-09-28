@@ -126,6 +126,7 @@ add_library(OpenSteamTool SHARED
     Utils/SteamMetadata/PatternLoader.cpp
     Utils/SteamMetadata/RemoteToml.cpp
     Utils/SteamMetadata/StatsClient.cpp
+    Utils/SteamMetadata/SchemaDownloader.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp
     Utils/Tokeer/TokeerBridge.cpp
     Utils/Tokeer/TokeerUri.cpp
