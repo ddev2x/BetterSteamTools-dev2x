@@ -22,6 +22,8 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <future>
 #include <mutex>
@@ -356,6 +358,7 @@ namespace Hooks_NetPacket_UserStats {
 
     // jobid_source -> appid mapping (eMsg 151 request -> eMsg 147 response)
     std::unordered_map<uint64, AppId_t> g_JobIdToAppId;
+    std::mutex g_JobIdMutex;
 
     // ── Send: CPlayer_GetUserStats_Request (eMsg 151) ──────────
     bool HandleSend_GetUserStats(const uint8* pBody, uint32 cbBody,
@@ -375,21 +378,19 @@ namespace Hooks_NetPacket_UserStats {
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats request: original body:\n{}", req.DebugString());
         
         AppId_t appId = req.appid();
-        bool hasShaSchema = req.has_sha_schema() && !req.sha_schema().empty();
-
-        if (hasShaSchema) {
-            LOG_ACHIEVEMENT_WARN("Player::GetUserStats request: sha_schema is present, do not spoof");
-            return false;
-        }
         if (!LuaConfig::HasDepot(appId)) {
             LOG_ACHIEVEMENT_WARN("Player::GetUserStats request: appid={} is not in addappid", appId);
             return false;
         }
 
+        // Force server to send the full schema by clearing sha_schema
+        req.clear_sha_schema();
+
         // Save jobid_source -> appid for the response handler
         CMsgProtoBufHeader hdr;
         if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_jobid_source()) {
             uint64 jobId = hdr.jobid_source();
+            std::lock_guard<std::mutex> lock(g_JobIdMutex);
             g_JobIdToAppId[jobId] = appId;
             LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats request: stored jobid={} -> appid={}", jobId, appId);
         }
@@ -408,7 +409,7 @@ namespace Hooks_NetPacket_UserStats {
     }
 
     // ── Recv: CPlayer_GetUserStats_Response (eMsg 147) ─────────
-    //     Header: set eresult=OK.  Body: strip stats (field 4).
+    //     Header: set eresult=OK.  Body: save schema, strip donor stats, overlay CR achievements.
     void HandleRecv_GetUserStatsResponse(const uint8* pHdr, uint32 cbHdr,
                                     const uint8* pBody, uint32 cbBody)
     {
@@ -425,6 +426,7 @@ namespace Hooks_NetPacket_UserStats {
         bool hasAppId = false;
         if (hdrMsg.has_jobid_target()) {
             uint64 jobId = hdrMsg.jobid_target();
+            std::lock_guard<std::mutex> lock(g_JobIdMutex);
             auto it = g_JobIdToAppId.find(jobId);
             if (it != g_JobIdToAppId.end()) {
                 appId = it->second;
@@ -434,6 +436,11 @@ namespace Hooks_NetPacket_UserStats {
             }
         }
 
+        if (!hasAppId || !LuaConfig::HasDepot(appId)) {
+            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: no appid match, skip body strip");
+            return;
+        }
+
         hdrMsg.set_eresult(static_cast<int32_t>(k_EResultOK));
         g_cbNewHdr = static_cast<uint32>(hdrMsg.ByteSizeLong());
         if (g_cbNewHdr > kMaxHdrSize || !hdrMsg.SerializeToArray(g_NewHdr, kMaxHdrSize))
@@ -441,7 +448,6 @@ namespace Hooks_NetPacket_UserStats {
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: modified header:\n{}", hdrMsg.DebugString());
         g_NeedReplaceHdr = true;
 
-        // Body: strip stats (only if appid was matched and is in our config)
         CPlayer_GetUserStats_Response resp;
         if (!resp.ParseFromArray(pBody, cbBody)){
             LOG_ACHIEVEMENT_WARN("Player::GetUserStats response: failed to ParseFromArray original response");
@@ -449,18 +455,62 @@ namespace Hooks_NetPacket_UserStats {
         }
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: original body:\n{}", resp.DebugString());
 
-        if (!hasAppId || !LuaConfig::HasDepot(appId)) {
-            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: no appid match, skip body strip");
-            return;
+        // Save schema if server returned it
+        if (resp.has_schema() && !resp.schema().empty() && SteamInstallPath[0] != '\0') {
+            try {
+                std::filesystem::path statsDir = std::filesystem::path(SteamInstallPath) / "appcache" / "stats";
+                std::filesystem::create_directories(statsDir);
+                std::filesystem::path schemaPath = statsDir / ("UserGameStatsSchema_" + std::to_string(appId) + ".bin");
+                std::ofstream out(schemaPath, std::ios::binary | std::ios::trunc);
+                if (out) {
+                    out.write(resp.schema().data(), resp.schema().size());
+                    LOG_ACHIEVEMENT_INFO("Player::GetUserStats response: saved schema for appId={} ({} bytes) to {}",
+                                         appId, resp.schema().size(), schemaPath.string());
+                }
+            } catch (const std::exception& e) {
+                LOG_ACHIEVEMENT_WARN("Player::GetUserStats response: failed to write schema: {}", e.what());
+            }
         }
 
+        // Clear donor's stats
         resp.clear_stats();
-        g_NewBodySize = static_cast<uint32>(resp.ByteSizeLong());
-        if (!resp.SerializeToArray(const_cast<uint8*>(pBody), cbBody)){
+
+        // Overlay CR's cloud-synced achievement state
+        CloudRedirectHost::AchievementBlock blocks[64];
+        uint32_t n = CloudRedirectHost::GetAchievements(appId, blocks, 64);
+        if (n > 0) {
+            uint32_t crc = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                auto* s = resp.add_stats();
+                s->set_stat_id(blocks[i].statId);
+                s->set_stat_value(blocks[i].bits);
+                for (uint32_t bit = 0; bit < 32; bit++) {
+                    if (blocks[i].unlockTimes[bit] > 0) {
+                        auto* u = s->add_unlock_times();
+                        u->set_achievement_bit(bit);
+                        u->set_unlock_time(blocks[i].unlockTimes[bit]);
+                    }
+                }
+                crc ^= blocks[i].bits ^ blocks[i].statId;
+            }
+            resp.set_crc_stats(crc);
+            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: injected {} CR achievement blocks for app {}", n, appId);
+        } else {
+            resp.set_crc_stats(0);
+        }
+
+        auto newSize = resp.ByteSizeLong();
+        if (newSize > sizeof(g_NewBody)) {
+            LOG_ACHIEVEMENT_WARN("Player::GetUserStats response: modified message too large ({} bytes)", newSize);
+            return;
+        }
+        if (!resp.SerializeToArray(g_NewBody, sizeof(g_NewBody))) {
             LOG_ACHIEVEMENT_WARN("Player::GetUserStats response: failed to SerializeToArray modified response");
             return;
         }
-        g_ResizedInPlace = true;
+
+        g_cbNewBody = static_cast<uint32>(newSize);
+        g_NeedReplaceBody = true;
 
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: modified body:\n{}", resp.DebugString());
     }
