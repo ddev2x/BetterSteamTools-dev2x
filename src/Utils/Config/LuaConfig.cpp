@@ -55,7 +55,9 @@ namespace LuaConfig{
     // Depot IDs removed by UnloadFile / added by ParseFile, consumed by NotifyLicenseChanged.
     static std::vector<AppId_t> g_pendingRemovals;
     static std::vector<AppId_t> g_pendingAdditions;
-    constexpr uint64_t kDefaultStatSteamId = 76561198028121353ULL;
+    
+    // constexpr uint64_t kDefaultStatSteamId = 76561198028121353ULL;
+    constexpr uint64_t kDefaultStatSteamId = 76561197960265729ULL;
 
     // Case-insensitive function registry: lowercase name → C function
     static std::unordered_map<std::string, lua_CFunction> g_func_registry;
