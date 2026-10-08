@@ -139,12 +139,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     }
     else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost())
     {
-        AppMetadataIpcServer::Stop();
-        ConfigFileWatcher::Stop();
-        LuaFileWatcher::Stop();
-        SteamUI::CoreUnhook();
-        SteamClient::CoreUnhook();
-        CloudRedirectHost::Shutdown();
+        // If pvReserved != nullptr, the process is terminating (ExitProcess).
+        // Under Windows Loader Lock, waiting on worker threads or IPC during process termination
+        // causes deadlocks / zombie processes. Teardown is only needed when dynamically unloaded via FreeLibrary.
+        if (pvReserved == nullptr)
+        {
+            AppMetadataIpcServer::Stop();
+            ConfigFileWatcher::Stop();
+            LuaFileWatcher::Stop();
+            SteamUI::CoreUnhook();
+            SteamClient::CoreUnhook();
+            CloudRedirectHost::Shutdown();
+        }
     }
 
     return TRUE;
