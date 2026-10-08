@@ -32,10 +32,13 @@ std::vector<std::string> g_watchDirs;
 constexpr uint32_t kDebounceMs = 500;
 
 bool IsLuaFile(const std::string& path) {
-    if (path.size() < 4) return false;
-    return std::equal(path.end() - 4, path.end(), ".lua", [](char lhs, char rhs) {
+    if (path.size() >= 4 && std::equal(path.end() - 4, path.end(), ".lua", [](char lhs, char rhs) {
         return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
-    });
+    })) return true;
+    if (path.size() >= 3 && std::equal(path.end() - 3, path.end(), ".np", [](char lhs, char rhs) {
+        return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
+    })) return true;
+    return false;
 }
 
 ChangeAction FromPlatformAction(OSTPlatform::DirectoryWatch::ChangeAction action) {

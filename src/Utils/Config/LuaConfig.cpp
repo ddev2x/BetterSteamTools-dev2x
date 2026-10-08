@@ -12,9 +12,19 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <wincrypt.h>
+#pragma comment(lib, "Advapi32.lib")
+#endif
 
 extern "C" {
     struct lua_State;
@@ -784,6 +794,299 @@ namespace LuaConfig{
         return result;
     }
 
+    // ── NP Encrypted Configuration Decryption ───────────────────
+    namespace {
+
+    static constexpr uint32_t K256[64] = {
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    };
+
+    static inline uint32_t rotr(uint32_t x, uint32_t n) {
+        return (x >> n) | (x << (32 - n));
+    }
+
+    static std::string Sha256PureHex(const void* dataPtr, size_t len) {
+        const uint8_t* data = static_cast<const uint8_t*>(dataPtr);
+        uint64_t bit_length = static_cast<uint64_t>(len) * 8;
+
+        std::vector<uint8_t> msg;
+        msg.reserve(len + 64);
+        if (len > 0 && data) {
+            msg.assign(data, data + len);
+        }
+        msg.push_back(0x80);
+        while ((msg.size() % 64) != 56) {
+            msg.push_back(0x00);
+        }
+        for (int i = 7; i >= 0; --i) {
+            msg.push_back(static_cast<uint8_t>((bit_length >> (i * 8)) & 0xff));
+        }
+
+        uint32_t h[8] = {
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        };
+
+        for (size_t offset = 0; offset < msg.size(); offset += 64) {
+            const uint8_t* chunk = msg.data() + offset;
+            uint32_t w[64];
+            for (int i = 0; i < 16; ++i) {
+                w[i] = (static_cast<uint32_t>(chunk[i * 4]) << 24) |
+                       (static_cast<uint32_t>(chunk[i * 4 + 1]) << 16) |
+                       (static_cast<uint32_t>(chunk[i * 4 + 2]) << 8) |
+                       (static_cast<uint32_t>(chunk[i * 4 + 3]));
+            }
+            for (int i = 16; i < 64; ++i) {
+                uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+                uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+                w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+            }
+
+            uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
+            uint32_t e = h[4], f = h[5], g = h[6], z = h[7];
+
+            for (int i = 0; i < 64; ++i) {
+                uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+                uint32_t ch = (e & f) ^ ((~e) & g);
+                uint32_t temp1 = z + s1 + ch + K256[i] + w[i];
+
+                uint32_t s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+                uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+                uint32_t temp2 = s0 + maj;
+
+                z = g;
+                g = f;
+                f = e;
+                e = d + temp1;
+                d = c;
+                c = b;
+                b = a;
+                a = temp1 + temp2;
+            }
+
+            h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+            h[4] += e; h[5] += f; h[6] += g; h[7] += z;
+        }
+
+        char hexBuf[65];
+        snprintf(hexBuf, sizeof(hexBuf),
+                 "%08x%08x%08x%08x%08x%08x%08x%08x",
+                 h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+        return std::string(hexBuf);
+    }
+
+    static inline uint8_t HexCharToNibble(char c) {
+        if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+        if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
+        if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
+        return 0;
+    }
+
+    static std::string BytesToHex(const uint8_t* data, size_t len) {
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string s;
+        s.reserve(len * 2);
+        for (size_t i = 0; i < len; ++i) {
+            s += kHex[(data[i] >> 4) & 0x0F];
+            s += kHex[data[i] & 0x0F];
+        }
+        return s;
+    }
+
+    static std::vector<uint8_t> GenerateKeystream(const std::string& keyHex, const uint8_t* nonce, size_t nonceLen, size_t length) {
+        std::string nonceHex = BytesToHex(nonce, nonceLen);
+        std::vector<uint8_t> stream;
+        stream.reserve(length + 32);
+        uint32_t counter = 0;
+        char counterBuf[16];
+        while (stream.size() < length) {
+            snprintf(counterBuf, sizeof(counterBuf), "%08x", counter);
+            std::string blockSeed = keyHex + ":" + nonceHex + ":" + counterBuf;
+            std::string blockHashHex = Sha256PureHex(blockSeed.data(), blockSeed.size());
+            for (size_t i = 0; i + 1 < blockHashHex.size(); i += 2) {
+                uint8_t b = (HexCharToNibble(blockHashHex[i]) << 4) | HexCharToNibble(blockHashHex[i+1]);
+                stream.push_back(b);
+            }
+            ++counter;
+        }
+        stream.resize(length);
+        return stream;
+    }
+
+    static std::string GetSavedAccountFromRegistry() {
+#ifdef _WIN32
+        HKEY hKey = nullptr;
+        LSTATUS status = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            L"Software\\Classes\\Local Settings\\Software\\.dev2x",
+            0,
+            KEY_QUERY_VALUE,
+            &hKey);
+        if (status != ERROR_SUCCESS) return "";
+
+        DWORD type = 0;
+        DWORD size = 0;
+        status = RegQueryValueExW(hKey, L"LocalAccount", nullptr, &type, nullptr, &size);
+        if (status != ERROR_SUCCESS || size == 0) {
+            RegCloseKey(hKey);
+            return "";
+        }
+
+        std::vector<BYTE> encryptedData(size);
+        status = RegQueryValueExW(hKey, L"LocalAccount", nullptr, &type, encryptedData.data(), &size);
+        RegCloseKey(hKey);
+        if (status != ERROR_SUCCESS) return "";
+
+        DATA_BLOB inBlob;
+        inBlob.cbData = static_cast<DWORD>(encryptedData.size());
+        inBlob.pbData = encryptedData.data();
+
+        static const char kEntropy[] = "niuplayer.local.credentials.v1";
+        DATA_BLOB entropyBlob;
+        entropyBlob.cbData = static_cast<DWORD>(sizeof(kEntropy) - 1);
+        entropyBlob.pbData = const_cast<BYTE*>(reinterpret_cast<const BYTE*>(kEntropy));
+
+        DATA_BLOB outBlob = {0, nullptr};
+
+        HMODULE hCrypt = LoadLibraryW(L"crypt32.dll");
+        if (!hCrypt) return "";
+
+        using CryptUnprotectData_t = BOOL (WINAPI*)(
+            DATA_BLOB*, LPWSTR*, DATA_BLOB*, PVOID,
+            CRYPTPROTECT_PROMPTSTRUCT*, DWORD, DATA_BLOB*);
+        auto pCryptUnprotectData = reinterpret_cast<CryptUnprotectData_t>(
+            GetProcAddress(hCrypt, "CryptUnprotectData"));
+
+        std::string account;
+        if (pCryptUnprotectData && pCryptUnprotectData(&inBlob, nullptr, &entropyBlob, nullptr, nullptr, 0, &outBlob)) {
+            if (outBlob.pbData && outBlob.cbData > 0) {
+                account.assign(reinterpret_cast<const char*>(outBlob.pbData), outBlob.cbData);
+            }
+            if (outBlob.pbData) {
+                LocalFree(outBlob.pbData);
+            }
+        }
+        FreeLibrary(hCrypt);
+        return account;
+#else
+        return "";
+#endif
+    }
+
+    static std::string NormalizeUsername(std::string username) {
+        while (!username.empty() && (username.front() == ' ' || username.front() == '\t' || username.front() == '\r' || username.front() == '\n')) {
+            username.erase(username.begin());
+        }
+        while (!username.empty() && (username.back() == ' ' || username.back() == '\t' || username.back() == '\r' || username.back() == '\n')) {
+            username.pop_back();
+        }
+
+        if (username.empty() || username.rfind("anonymous-", 0) == 0) {
+#ifdef _WIN32
+            char envBuf[256] = {0};
+            DWORD len = GetEnvironmentVariableA("NIUPLAY_USERNAME", envBuf, sizeof(envBuf));
+            if (len > 0 && len < sizeof(envBuf)) {
+                username = envBuf;
+            } else {
+                username = "-1@qq.com";
+            }
+#else
+            username = "-1@qq.com";
+#endif
+        }
+
+        bool allDigits = !username.empty();
+        for (char c : username) {
+            if (!isdigit(static_cast<unsigned char>(c))) {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) {
+            username += "@qq.com";
+        }
+        return username;
+    }
+
+    static std::vector<std::string> GetCandidateKeys() {
+        std::vector<std::string> keys;
+        std::string rawAccount = GetSavedAccountFromRegistry();
+        if (!rawAccount.empty()) {
+            std::string norm = NormalizeUsername(rawAccount);
+            keys.push_back(Sha256PureHex(norm.data(), norm.size()));
+            if (norm != rawAccount) {
+                keys.push_back(Sha256PureHex(rawAccount.data(), rawAccount.size()));
+            }
+        }
+
+#ifdef _WIN32
+        char envBuf[256] = {0};
+        DWORD len = GetEnvironmentVariableA("NIUPLAY_USERNAME", envBuf, sizeof(envBuf));
+        if (len > 0 && len < sizeof(envBuf)) {
+            std::string envUser = NormalizeUsername(std::string(envBuf));
+            keys.push_back(Sha256PureHex(envUser.data(), envUser.size()));
+        }
+#endif
+
+        std::string fallback = "-1@qq.com";
+        keys.push_back(Sha256PureHex(fallback.data(), fallback.size()));
+
+        std::vector<std::string> uniqueKeys;
+        for (const auto& k : keys) {
+            if (std::find(uniqueKeys.begin(), uniqueKeys.end(), k) == uniqueKeys.end()) {
+                uniqueKeys.push_back(k);
+            }
+        }
+        return uniqueKeys;
+    }
+
+    static bool DecryptNpData(const uint8_t* data, size_t size, std::string& outPlaintext) {
+        if (size < 4 + 16 + 32) return false;
+        if (data[0] != 'N' || data[1] != 'P' || data[2] != '0' || data[3] != '1') return false;
+
+        const uint8_t* nonce = data + 4;
+        const uint8_t* expectedMac = data + 20;
+        const uint8_t* ciphertext = data + 52;
+        size_t cipherLen = size - 52;
+
+        std::string nonceHex = BytesToHex(nonce, 16);
+        std::string cipherHex = BytesToHex(ciphertext, cipherLen);
+        std::string expectedMacHex = BytesToHex(expectedMac, 32);
+
+        auto candidateKeys = GetCandidateKeys();
+        for (const auto& keyHex : candidateKeys) {
+            std::string macInput = keyHex + nonceHex + cipherHex;
+            std::string calculatedMacHex = Sha256PureHex(macInput.data(), macInput.size());
+            if (calculatedMacHex == expectedMacHex) {
+                auto keystream = GenerateKeystream(keyHex, nonce, 16, cipherLen);
+                std::vector<uint8_t> plain(cipherLen);
+                for (size_t i = 0; i < cipherLen; ++i) {
+                    plain[i] = ciphertext[i] ^ keystream[i];
+                }
+                outPlaintext.assign(reinterpret_cast<const char*>(plain.data()), plain.size());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    } // namespace
+
     static std::vector<std::string> CollectLuaFiles(const std::string& directory) {
         std::vector<std::string> files;
 
@@ -796,7 +1099,9 @@ namespace LuaConfig{
         for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
-            if (entry.path().extension() != ".lua") continue;
+            auto ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (ext != ".lua" && ext != ".np") continue;
             files.push_back(entry.path().string());
         }
         return files;
@@ -811,12 +1116,41 @@ namespace LuaConfig{
         g_currentFile = filePath;
 
         std::filesystem::path path(filePath);
-        std::ifstream file(path);
-        if (!file) {
-            LOG_WARN("ParseFile: failed to open {}", path.filename().string());
-            g_currentFile.clear();
-            return;
+        std::ifstream file;
+        std::istringstream npStream;
+        bool isNp = false;
+        {
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (ext == ".np") {
+                isNp = true;
+            }
         }
+
+        if (isNp) {
+            std::ifstream npFile(path, std::ios::binary);
+            if (!npFile) {
+                LOG_WARN("ParseFile: failed to open {}", path.filename().string());
+                g_currentFile.clear();
+                return;
+            }
+            std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(npFile)), std::istreambuf_iterator<char>());
+            std::string decryptedContent;
+            if (!DecryptNpData(buffer.data(), buffer.size(), decryptedContent)) {
+                LOG_WARN("ParseFile: failed to decrypt {}", path.filename().string());
+                g_currentFile.clear();
+                return;
+            }
+            npStream.str(std::move(decryptedContent));
+        } else {
+            file.open(path);
+            if (!file) {
+                LOG_WARN("ParseFile: failed to open {}", path.filename().string());
+                g_currentFile.clear();
+                return;
+            }
+        }
+
         g_fileParseSequence[filePath] = ++g_nextFileParseSequence;
         
         // Capture the file's last-modified time (unix epoch, seconds) so
@@ -834,9 +1168,11 @@ namespace LuaConfig{
             g_fileMtime[filePath] = mtime;
         }
 
+        std::istream& in = isNp ? static_cast<std::istream&>(npStream) : static_cast<std::istream&>(file);
+
         std::string chunk, line;
         int lineNo = 0;
-        while (std::getline(file, line)) {
+        while (std::getline(in, line)) {
             ++lineNo;
             if (!chunk.empty()) chunk += '\n';
             chunk += line;
