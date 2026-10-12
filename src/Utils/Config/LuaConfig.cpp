@@ -4,6 +4,7 @@
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/SteamMetadata/StatsClient.h"
 #include "Utils/Tickets/AppTicket.h"
+#include "Utils/Collection/NiuWanCollection.h"
 
 #include <lua.hpp>
 
@@ -51,6 +52,7 @@ namespace LuaConfig{
 
     // Per-file tracking: which depots each .lua file contributed.
     static std::string g_currentFile;
+    static bool g_isCurrentFileNp = false;
     static std::unordered_map<std::string, std::unordered_set<AppId_t>> g_fileDepots;
     static std::unordered_map<std::string, std::unordered_map<uint64_t, ManifestOverride>> g_fileManifestOverrides;
     static std::unordered_map<std::string, uint64_t> g_fileParseSequence;
@@ -242,6 +244,10 @@ namespace LuaConfig{
                 if (++g_depotRefCount[DepotId] == 1)
                     g_pendingAdditions.push_back(DepotId);
                 
+                if (g_isCurrentFileNp) {
+                    NiuWanCollection::RegisterNpAppId(DepotId);
+                }
+
                 // Update the appId's purchase time with the current file's mtime,
                 // keeping the maximum across every contributing file.
                 auto mtIt = g_fileMtime.find(g_currentFile);
@@ -749,7 +755,18 @@ namespace LuaConfig{
         if (depotsIt == g_fileDepots.end() && manifestIt == g_fileManifestOverrides.end()) return;
 
         if (depotsIt != g_fileDepots.end()) {
+            bool isNpFile = false;
+            {
+                std::filesystem::path p(filePath);
+                auto ext = p.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (ext == ".np") isNpFile = true;
+            }
+
             for (AppId_t id : depotsIt->second) {
+                if (isNpFile) {
+                    NiuWanCollection::UnregisterNpAppId(id);
+                }
                 LOG_PACKAGE_DEBUG("UnloadFile:Ref count for AppId {} is {}", id, g_depotRefCount[id]);
                 if (--g_depotRefCount[id] == 0) {
                     g_depotRefCount.erase(id);
@@ -1128,10 +1145,12 @@ namespace LuaConfig{
         }
 
         if (isNp) {
+            g_isCurrentFileNp = true;
             std::ifstream npFile(path, std::ios::binary);
             if (!npFile) {
                 LOG_WARN("ParseFile: failed to open {}", path.filename().string());
                 g_currentFile.clear();
+                g_isCurrentFileNp = false;
                 return;
             }
             std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(npFile)), std::istreambuf_iterator<char>());
@@ -1139,10 +1158,12 @@ namespace LuaConfig{
             if (!DecryptNpData(buffer.data(), buffer.size(), decryptedContent)) {
                 LOG_WARN("ParseFile: failed to decrypt {}", path.filename().string());
                 g_currentFile.clear();
+                g_isCurrentFileNp = false;
                 return;
             }
             npStream.str(std::move(decryptedContent));
         } else {
+            g_isCurrentFileNp = false;
             file.open(path);
             if (!file) {
                 LOG_WARN("ParseFile: failed to open {}", path.filename().string());
@@ -1217,6 +1238,7 @@ namespace LuaConfig{
         lua_pop(g_lua_state, 1);
 
         g_currentFile.clear();
+        g_isCurrentFileNp = false;
     }
 
     // ── directory scanner ────────────────────────────────────────

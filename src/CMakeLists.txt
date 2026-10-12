@@ -131,6 +131,7 @@ add_library(OpenSteamTool SHARED
     Utils/Tokeer/TokeerBridge.cpp
     Utils/Tokeer/TokeerUri.cpp
     Utils/Update/AppUpdater.cpp
+    Utils/Collection/NiuWanCollection.cpp
 
     # Pipe subsystem: generic handshake registry + ProcessInspector core, plus
     # self-contained features that own their primitives.

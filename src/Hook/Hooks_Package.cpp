@@ -2,6 +2,7 @@
 #include "HookMacros.h"
 #include "Hooks_SteamUI.h"
 #include "dllmain.h"
+#include "Utils/Collection/NiuWanCollection.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
 #include <mutex>
@@ -326,5 +327,8 @@ namespace Hooks_Package {
         }
         LOG_PACKAGE_DEBUG("NotifyLicenseChanged: queued {} UI removals, skipped {} transient removals",
                           queuedRemovalCount, removals.size() - queuedRemovalCount);
+
+        // 同步“牛玩”分类（新增或删除的 .np 游戏自动同步到 cloudstorage JSON 中）
+        NiuWanCollection::SyncCollection(SteamInstallPath);
     }
 }

@@ -10,6 +10,7 @@
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Tokeer/TokeerBridge.h"
 #include "Utils/AppMetadata/AppMetadataIpcServer.h"
+#include "Utils/Collection/NiuWanCollection.h"
 #ifdef OST_ENABLE_UPDATER
 #include "Utils/Update/AppUpdater.h"
 #endif
@@ -81,6 +82,9 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
         LuaConfig::MergeWatchDirs(Config::GetLuaPaths(), std::string(LuaDir));
     for (const auto& dir : watchDirs)
         LuaConfig::ParseDirectory(dir);
+
+    // 启动初始扫描完成后，同步“牛玩”分类
+    NiuWanCollection::SyncCollection(SteamInstallPath);
 
     LuaFileWatcher::Start(watchDirs);
     ConfigFileWatcher::Start(ConfigPath, LuaDir);
