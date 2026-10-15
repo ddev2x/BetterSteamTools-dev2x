@@ -176,8 +176,12 @@ namespace {
         RecordDepots(pDepotInfo);
         RecordDepots(pSharedDepotInfo);
 
-        // ── 直接跳过无法解密的 Depot（包括 DLC 仓库及无 Key 的额外仓库），保证其余内容完成下载 ──
-        if (pDepotInfo && pDepotInfo->m_Size > 0) {
+        // ── 直接跳过无法解密的 Depot（包括无 Key 的 DLC 及额外仓库），保证其余内容顺利完成下载 ──
+        // 限制保护原则：
+        // 1. 只有通过 Lua/np 脚本入库且非真实拥有的解锁游戏才进行过滤；用户正版游戏由 Steam 原生处理，严禁篡改！
+        // 2. 有 Key 或账号真实拥有的 Depot 正常下载；无 Key 且未拥有的 Depot 自动跳过，防止卡“内容处于加密状态”阻断整个下载流程！
+        // 3. 过滤后若 newSize == 0，绝不能将 m_Size 置为 0，防止触发 Steam 抹盘清空游戏目录
+        if (pDepotInfo && pDepotInfo->m_Size > 0 && AppId != 0 && LuaConfig::HasDepot(AppId, /*checkOwned=*/true)) {
             auto owned = Hooks_Package::GetOwnedDepots();
             std::unordered_set<uint32_t> ownedSet;
             if (owned.ready) {
@@ -188,14 +192,14 @@ namespace {
             for (uint32 i = 0; i < pDepotInfo->m_Size; ++i) {
                 const DepotEntry& e = pDepotInfo->m_Memory.m_pMemory[i];
 
-                // 1. 如果本地配置了有效的 64 位 key，绝不跳过（可正常解密）
+                // 1. 如果本地配置了有效的 64 位 key，绝不跳过（可正常解密下载）
                 if (!LuaConfig::GetDecryptionKey(e.DepotId).empty()) {
                     if (newSize != i) pDepotInfo->m_Memory.m_pMemory[newSize] = e;
                     newSize++;
                     continue;
                 }
 
-                // 2. 如果属于账号真实拥有/已购买的仓库，绝不跳过（Steam 服务器会下发 key）
+                // 2. 如果属于账号真实拥有/已购买的仓库，绝不跳过（Steam 官方会下发 key）
                 if (LuaConfig::IsOwned(e.DepotId) || (owned.ready && ownedSet.count(e.DepotId))) {
                     if (newSize != i) pDepotInfo->m_Memory.m_pMemory[newSize] = e;
                     newSize++;
@@ -207,12 +211,18 @@ namespace {
                     continue;
                 }
 
-                // 3. 此时说明：既不是真实拥有，本地也没有解密 key！
-                // 强行下载必然会导致解密失败报“内容仍然处于加密状态”，直接跳过！
-                LOG_MANIFEST_WARN("BuildDepotDependency: 跳过无密钥的仓库 depot={} (DlcAppId={})，防止卡加密状态",
+                // 3. 此时说明：该 Depot 既非账号拥有，本地也没有配置解密 key！
+                // 强行下载必然会导致解密失败报“内容仍然处于加密状态”并中断暂停下载；
+                // 直接跳过该 Depot，确保有 Key 的其余内容顺利完成下载，不耽误整个下载流程！
+                LOG_MANIFEST_WARN("BuildDepotDependency: 跳过无密钥的仓库 depot={} (DlcAppId={})，防止卡加密状态阻断下载",
                     e.DepotId, e.DlcAppId);
             }
-            pDepotInfo->m_Size = newSize;
+
+            if (newSize > 0) {
+                pDepotInfo->m_Size = newSize;
+            } else {
+                LOG_MANIFEST_ERROR("BuildDepotDependency: app {} 过滤后仓库列表为空，放弃修改以防止清空游戏目录", AppId);
+            }
         }
 
 
