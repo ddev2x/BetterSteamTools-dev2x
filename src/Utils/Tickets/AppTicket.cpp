@@ -41,7 +41,18 @@ namespace AppTicket {
 
     // Exploit steamdrmp's off-by-four ticket parsing vulnerability:
     static std::vector<uint8_t> ForgeLocalAppOwnershipTicket(AppId_t appId) {
-        std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(kLocalAppTicketSourceAppId);
+        static const AppId_t kCandidateSourceAppIds[] = {kLocalAppTicketSourceAppId, 480};
+        std::vector<uint8_t> source;
+        AppId_t usedSourceId = 0;
+
+        for (AppId_t candidateId : kCandidateSourceAppIds) {
+            source = Hooks_Decryption::GetCacheAppOwnershipTicket(candidateId);
+            if (source.size() > kAppTicketSignatureSize) {
+                usedSourceId = candidateId;
+                break;
+            }
+        }
+
         if (source.size() <= kAppTicketSignatureSize) {
             LOG_DEBUG("ForgeLocalAppOwnershipTicket for AppId {}: no source appticket", appId);
             return {};
@@ -57,7 +68,7 @@ namespace AppTicket {
         ticket.insert(ticket.end(), source.begin() + signedSize, source.end());
 
         LOG_INFO("Forged App Ownership Ticket, AppId: {}, SourceAppId: {}, Physical Size: {}, Total Size: {}",
-                 appId, kLocalAppTicketSourceAppId, ticket.size(), source.size());
+                 appId, usedSourceId, ticket.size(), source.size());
         return ticket;
     }
 
